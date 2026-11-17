@@ -75,6 +75,7 @@ steps:
   - tests/models/test_terratorch.py
   - tests/models/transformers/test_backend.py
   - tests/models/test_registry.py
+  - tests/models/flint/test_fp16_ops.py
   - tests/models/test_deepseek_v4_vl_rocm.py
   - tests/models/test_deepseek_v4_vl.py
   - tests/models/test_deepseek_v41_decoder_replay_layers.py
@@ -95,6 +96,7 @@ steps:
       models/test_terratorch.py
       models/transformers/test_backend.py
       models/test_registry.py
+      models/flint/test_fp16_ops.py
       models/test_deepseek_v4_vl_rocm.py
       models/test_deepseek_v4_vl.py
       models/transformers/test_layer_registry_e2e.py

@@ -74,6 +74,10 @@ def _launch_norm(x, residual, weight, eps, out):
 
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+    if x.dtype != torch.bfloat16:
+        values = x.float()
+        scale = torch.rsqrt(values.square().mean(dim=-1, keepdim=True) + eps)
+        return (values * scale * weight.float()).to(x.dtype)
     out = torch.empty(x.shape, dtype=x.dtype, device=x.device)
     _launch_norm(x, None, weight, eps, out)
     return out
@@ -84,6 +88,12 @@ def fused_add_rms_norm(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """In place: ``residual = bf16(x + residual)``, ``x = rms_norm(x +
     residual)``; returns ``(x, residual)``."""
+    if x.dtype != torch.bfloat16:
+        values = x.float() + residual.float()
+        out = rms_norm(values, weight, eps).to(x.dtype)
+        residual.copy_(values)
+        x.copy_(out)
+        return x, residual
     assert residual.shape == x.shape and residual.is_contiguous()
     assert x.is_contiguous()
     _launch_norm(x, residual, weight, eps, x)
@@ -102,6 +112,9 @@ def _silu_and_mul_kernel(x_ptr, out_ptr, x_stride, D: tl.constexpr, BD: tl.const
 
 def silu_and_mul(x: torch.Tensor) -> torch.Tensor:
     """``silu(x[:, :D]) * x[:, D:]`` for ``x`` [M, 2D]."""
+    if x.dtype != torch.bfloat16:
+        gate, up = x.float().chunk(2, dim=-1)
+        return (gate / (1 + torch.exp(-gate)) * up).to(x.dtype)
     m, d2 = x.shape
     d = d2 // 2
     assert x.dtype == torch.bfloat16 and x.stride(-1) == 1

@@ -46,6 +46,29 @@ vllm serve unsloth/Qwen3-0.6B-GGUF:Q4_K_M \
    --hf-config-path Qwen/Qwen3-0.6B
 ```
 
+## Flint on Tesla T4
+
+Flint mixed-quantization GGUF checkpoints require the GGUF plugin's Flint
+weights adapter. Use `--dtype float16` on Tesla T4. Flint uses a general
+attention path when its fused BF16 FlashInfer path is unavailable, retaining
+the learned attention sinks and sliding windows.
+
+Tensor parallelism must preserve each GGUF quantization block. Flint's MoE
+intermediate size is 512; K-quant formats such as Q5_K use blocks of 256, so
+use at most two tensor-parallel ranks for these expert weights. For four T4
+GPUs, combine two tensor-parallel ranks with two pipeline stages:
+
+```bash
+vllm serve /path/to/flint.gguf \
+    --hf-config-path /path/to/flint-config \
+    --tokenizer /path/to/flint-config \
+    --dtype float16 \
+    --tensor-parallel-size 2 \
+    --pipeline-parallel-size 2
+```
+
+## Offline inference
+
 You can also use the GGUF model directly through the LLM entrypoint:
 
 ??? code

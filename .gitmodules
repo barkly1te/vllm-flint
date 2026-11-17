@@ -1,0 +1,4 @@
+[submodule "vllm-gguf-plugin"]
+	path = vllm-gguf-plugin
+	url = git@github.com:barkly1te/vllm-flint.git
+	branch = codex/flint-gguf-plugin

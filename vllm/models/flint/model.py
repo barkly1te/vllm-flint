@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Inference-only Flint model (BF16 safetensors or NVFP4 GGUF checkpoints).
+"""Inference-only Flint model with safetensors and GGUF checkpoint support.
 
 Flint is a Qwen3-MoE-style decoder with learned attention sinks, hybrid
 sliding-window/full attention (full layers use no RoPE), dense SwiGLU MLPs on
@@ -315,7 +315,14 @@ class FlintAttention(nn.Module):
         )
 
         impl = self.attn.impl
-        assert isinstance(impl, FlashInferImpl), "Flint requires FlashInfer attention"
+        self.use_fused_attention = (
+            isinstance(impl, FlashInferImpl)
+            and get_current_vllm_config().model_config.dtype == torch.bfloat16
+        )
+        self.flint_decode = False
+        if not self.use_fused_attention:
+            return
+        assert isinstance(impl, FlashInferImpl)
         self._metadata_cls = FlashInferMetadata
         self._decode_cls = FlashInferTrtllmAPIDecode
         assert get_current_vllm_config().model_config.dtype == torch.bfloat16
@@ -337,6 +344,30 @@ class FlintAttention(nn.Module):
         self, positions: torch.Tensor, hidden_states: torch.Tensor
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
+        if not self.use_fused_attention:
+            q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+            q = self.q_norm(q.reshape(-1, self.head_dim)).reshape(
+                -1, self.num_heads, self.head_dim
+            )
+            k = self.k_norm(k.reshape(-1, self.head_dim)).reshape(
+                -1, self.num_kv_heads, self.head_dim
+            )
+            if self.rotary_emb is not None:
+                cos, sin = self.rotary_emb.cos_sin_cache[positions].chunk(2, dim=-1)
+                cos, sin = cos.unsqueeze(1), sin.unsqueeze(1)
+
+                def rotate(x: torch.Tensor) -> torch.Tensor:
+                    a, b = x.float().chunk(2, dim=-1)
+                    return torch.cat((a * cos - b * sin, b * cos + a * sin), -1).to(
+                        x.dtype
+                    )
+
+                q, k = rotate(q), rotate(k)
+            output = self.attn(
+                q.reshape(-1, self.q_size), k.reshape(-1, self.kv_size), v
+            )
+            output, _ = self.o_proj(output)
+            return output
         k_cache, v_cache, layer_slots = self._cache_views()
         plan = self._decode_plan() if self.flint_decode else None
         q = qk_norm_rope_cache(
@@ -619,10 +650,18 @@ class FlintForCausalLM(nn.Module, SupportsPP):
         self.config = config
 
         model_config = vllm_config.model_config
-        self.gguf_path = find_gguf_file(
-            model_config.model,
-            model_config.revision,
-            vllm_config.load_config.download_dir,
+        plugin_gguf = (
+            vllm_config.quant_config is not None
+            and vllm_config.quant_config.get_name() == "gguf"
+        )
+        self.gguf_path = (
+            None
+            if plugin_gguf
+            else find_gguf_file(
+                model_config.model,
+                model_config.revision,
+                vllm_config.load_config.download_dir,
+            )
         )
         quant_config = vllm_config.quant_config
         if self.gguf_path is not None:
