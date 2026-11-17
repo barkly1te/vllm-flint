@@ -10,6 +10,7 @@ from .diffusion import (
     ZImageDiffusionGGUFAdapter,
     get_diffusion_gguf_adapter,
 )
+from .flint import FlintGGUFAdapter
 from .gemma3 import Gemma3GGUFAdapter
 from .gemma4 import Gemma4GGUFAdapter
 from .olmoe import OLMoEGGUFAdapter
@@ -17,6 +18,7 @@ from .qwen3_5 import Qwen35GGUFAdapter, Qwen35MtpGGUFAdapter
 from .transformers import TransformersGGUFWeightsAdapter
 
 _ADAPTER_REGISTRY: list[type[BaseGGUFWeightsAdapter]] = [
+    FlintGGUFAdapter,
     Gemma3GGUFAdapter,
     Gemma4GGUFAdapter,
     OLMoEGGUFAdapter,

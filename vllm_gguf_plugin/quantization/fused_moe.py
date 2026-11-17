@@ -42,6 +42,9 @@ def _fused_moe_gguf(
     activation: str,
 ) -> torch.Tensor:
     activation_enum = MoEActivation.from_str(activation)
+    valid_experts = topk_ids >= 0
+    topk_ids = topk_ids.clamp_min(0)
+    topk_weights = topk_weights.masked_fill(~valid_experts, 0)
 
     def act(inp: torch.Tensor):
         d = inp.shape[-1] // 2
@@ -130,7 +133,7 @@ def _fused_moe_gguf(
                 else:
                     current_hidden_state.add_(current_state)
             out_hidden_states[tok] = current_hidden_state
-    return out_hidden_states
+    return out_hidden_states.masked_fill(~valid_experts.any(dim=-1, keepdim=True), 0)
 
 
 def _fused_moe_gguf_fake(

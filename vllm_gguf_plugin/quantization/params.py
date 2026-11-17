@@ -197,6 +197,17 @@ def _gguf_moe_weight_loader(
     expert_id: int,
     return_success: bool = False,
 ) -> bool | None:
+    if shard_id == "w2":
+        weight_type = gguf.GGMLQuantizationType(layer.w2_weight_type.weight_type)
+        block_size, _ = gguf.GGML_QUANT_SIZES[weight_type]
+        partition_size = layer.moe_config.intermediate_size_per_partition
+        if partition_size % block_size:
+            raise ValueError(
+                f"GGUF {weight_type.name} expert input partition size "
+                f"{partition_size} must be divisible by quantization block size "
+                f"{block_size}. Reduce tensor_parallel_size and use pipeline "
+                "parallelism to distribute the model across more GPUs."
+            )
     _materialize_gguf_moe_param(layer, param, loaded_weight, shard_id)
     return base_weight_loader(
         param,

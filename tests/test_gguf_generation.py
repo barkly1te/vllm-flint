@@ -9,6 +9,8 @@ import os
 import warnings
 from typing import NamedTuple
 
+import gguf
+import numpy as np
 import pytest
 import torch
 from transformers import AutoTokenizer
@@ -17,6 +19,93 @@ from vllm import LLM, SamplingParams
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 MAX_MODEL_LEN = 1024
+
+
+def test_flint_fp16_gguf_generates_through_dense_and_moe_layers(tmp_path):
+    """Exercise FP16 attention, sinks, RoPE and quantized experts via LLM."""
+    from vllm.models.flint.configs import FlintConfig
+
+    config = FlintConfig(
+        architectures=["FlintForCausalLM"],
+        hidden_size=128,
+        intermediate_size=128,
+        moe_intermediate_size=128,
+        shared_expert_intermediate_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=32,
+        num_experts=2,
+        num_experts_per_tok=1,
+        vocab_size=256,
+        max_position_embeddings=32,
+        sliding_window=16,
+        layer_types=["full_attention", "sliding_attention"],
+        no_rope_layer_indices=[0],
+        mlp_only_layers=[0],
+        eos_token_id=255,
+    )
+    config.save_pretrained(tmp_path)
+    path = tmp_path / "flint.gguf"
+    writer = gguf.GGUFWriter(str(path), "flint")
+    writer.add_tensor("token_embd.weight", np.ones((256, 128), dtype=np.float16))
+    writer.add_tensor("output_norm.weight", np.ones(128, dtype=np.float32))
+    head = np.zeros((256, 128), dtype=np.float16)
+    head[42] = 1
+    writer.add_tensor("output.weight", head)
+
+    def quantized(name, shape):
+        data = gguf.quants.quantize(
+            np.zeros(shape, dtype=np.float32), gguf.GGMLQuantizationType.Q8_0
+        )
+        writer.add_tensor(name, data, raw_dtype=gguf.GGMLQuantizationType.Q8_0)
+
+    for layer in range(2):
+        prefix = f"blk.{layer}."
+        for name, size in (
+            ("attn_norm", 128),
+            ("ffn_norm", 128),
+            ("attn_q_norm", 32),
+            ("attn_k_norm", 32),
+        ):
+            writer.add_tensor(prefix + name + ".weight", np.ones(size, np.float32))
+        writer.add_tensor(prefix + "attn_sinks.weight", np.zeros(4, np.float32))
+        for name, rows in (
+            ("attn_q", 128),
+            ("attn_k", 64),
+            ("attn_v", 64),
+            ("attn_output", 128),
+        ):
+            quantized(prefix + name + ".weight", (rows, 128))
+        for name in ("ffn_gate", "ffn_up", "ffn_down"):
+            if layer == 0:
+                quantized(prefix + name + ".weight", (128, 128))
+            else:
+                quantized(prefix + name + "_exps.weight", (2, 128, 128))
+                quantized(prefix + name + "_shexp.weight", (128, 128))
+        if layer == 1:
+            writer.add_tensor(
+                prefix + "ffn_gate_inp.weight", np.zeros((2, 128), np.float32)
+            )
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+    llm = LLM(
+        model=str(path),
+        hf_config_path=str(tmp_path),
+        skip_tokenizer_init=True,
+        dtype="float16",
+        enforce_eager=True,
+        max_model_len=32,
+        max_num_seqs=1,
+        gpu_memory_utilization=0.15,
+    )
+    output = llm.generate(
+        [{"prompt_token_ids": [1, 2]}],
+        SamplingParams(temperature=0, max_tokens=2, detokenize=False),
+    )
+    assert list(output[0].outputs[0].token_ids) == [42, 42]
 
 
 class GGUFTestConfig(NamedTuple):
