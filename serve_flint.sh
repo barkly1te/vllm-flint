@@ -19,7 +19,7 @@ PP_SIZE=2
 # T4 显存配置
 GPU_MEMORY_UTIL=0.85
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-4}"
 
 # 使用 4 张 GPU
 export CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -49,6 +49,10 @@ echo "Model: $MODEL_PATH"
 echo "GPUs: $CUDA_VISIBLE_DEVICES"
 echo "Tensor Parallel: $TP_SIZE"
 echo "Pipeline Parallel: $PP_SIZE"
+echo "Max Model Length: $MAX_MODEL_LEN"
+echo "Max Concurrent Sequences: $MAX_NUM_SEQS"
+echo "CUDA Graph: decode only (1, 2, 4 requests)"
+echo "torch.compile: disabled"
 echo "Port: $PORT"
 echo "=================================="
 
@@ -65,4 +69,5 @@ exec "$VLLM_BIN" serve "$MODEL_PATH" \
     --gpu-memory-utilization "$GPU_MEMORY_UTIL" \
     --max-model-len "$MAX_MODEL_LEN" \
     --max-num-seqs "$MAX_NUM_SEQS" \
-    --enforce-eager
+    --compilation-config '{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY","decode_cudagraph_capture_request_sizes":[1,2,4]}' \
+    --kernel-config '{"enable_jit_warmup":false}'
